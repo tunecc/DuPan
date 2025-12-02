@@ -1,11 +1,16 @@
 import time
 import re
+import hmac
+import hashlib
+import base64
 import requests
 
 # 设置参数
 BAIDU_COOKIE = '你的百度网盘Cookie' # 替换为你的实际Cookie
 TELEGRAM_BOT_TOKEN = '你的Telegram机器人Token' # 替换为你的实际Token，如不需要可留空
 TELEGRAM_CHAT_ID = '你的Telegram聊天ID' # 替换为你的实际聊天ID，如不需要可留空
+FEISHU_WEBHOOK_URL = '你的飞书机器人Webhook URL' # 替换为你的实际URL，如不需要可留空
+FEISHU_SECRET = '' # 飞书机器人安全密钥（可选），如不需要签名验证可留空
 
 HEADERS = {
     'Connection': 'keep-alive',
@@ -153,6 +158,79 @@ def send_telegram_once(message):
     except Exception as e:
         print("发送Telegram消息时出现异常:", e)
 
+def gen_feishu_sign(timestamp, secret):
+    """生成飞书签名"""
+    string_to_sign = f'{timestamp}\n{secret}'
+    hmac_code = hmac.new(
+        string_to_sign.encode('utf-8'),
+        digestmod=hashlib.sha256
+    ).digest()
+    sign = base64.b64encode(hmac_code).decode('utf-8')
+    return sign
+
+def send_feishu_message(message):
+    """推送消息到飞书机器人
+    
+    Args:
+        message: 要发送的消息内容
+        
+    Returns:
+        tuple: (是否成功, 错误信息或None)
+    """
+    if not FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL == '你的飞书机器人Webhook URL':
+        error_msg = "未提供飞书机器人Webhook URL，无法发送通知"
+        print(error_msg)
+        return False, error_msg
+    
+    # 构建消息体
+    payload = {
+        "msg_type": "text",
+        "content": {
+            "text": message
+        }
+    }
+    
+    # 如果配置了安全密钥，则添加签名
+    if FEISHU_SECRET:
+        timestamp = str(int(time.time()))
+        sign = gen_feishu_sign(timestamp, FEISHU_SECRET)
+        payload["timestamp"] = timestamp
+        payload["sign"] = sign
+    
+    try:
+        resp = requests.post(
+            FEISHU_WEBHOOK_URL,
+            json=payload,
+            timeout=10,
+            headers={"Content-Type": "application/json"}
+        )
+        
+        if resp.status_code == 200:
+            resp_json = resp.json()
+            if resp_json.get("code") == 0 or resp_json.get("StatusCode") == 0:
+                print("飞书消息发送成功")
+                return True, None
+            else:
+                error_msg = f"飞书消息发送失败: {resp_json.get('msg', '未知错误')}"
+                print(error_msg)
+                return False, error_msg
+        else:
+            error_msg = f"飞书消息发送失败, 状态码: {resp.status_code}"
+            print(error_msg)
+            return False, error_msg
+    except requests.exceptions.Timeout:
+        error_msg = "飞书消息发送超时，请检查网络连接"
+        print(error_msg)
+        return False, error_msg
+    except requests.exceptions.ConnectionError:
+        error_msg = "飞书消息发送失败，无法连接到飞书服务器"
+        print(error_msg)
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"发送飞书消息时出现异常: {e}"
+        print(error_msg)
+        return False, error_msg
+
 def main():
     """脚本主流程"""
     signin()
@@ -166,6 +244,7 @@ def main():
     if final_messages:
         summary_msg = "\n".join(final_messages)
         send_telegram_once(summary_msg)
+        send_feishu_message(summary_msg)
 
 if __name__ == "__main__":
     main()
